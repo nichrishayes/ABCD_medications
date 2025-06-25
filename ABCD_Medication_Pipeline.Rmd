@@ -1,0 +1,326 @@
+---
+title: "ABCD_Medication_Pipeline"
+author: "Nicholas Christopher-Hayes"
+date: "2024_11"
+output:
+  html_document:
+    df_print: paged
+urlcolor: blue
+---
+
+
+# Setup
+
+## Packages
+```{r message = F, include = F}
+# The following code checks whether the packages needed for today are already installed, if not, they will be installed.
+
+## Minimal Install
+suppressPackageStartupMessages({
+  # packages for data management
+  my_packages = c("utils", "plyr", "tidyr", "dplyr", "stringr", "rlang", "broom", "purrr", "utf8", "devtools", "tidyverse", "knitr", "data.table", "combinat")
+  install.packages(setdiff(my_packages, installed.packages()), repos = "http://cran.us.r-project.org")
+  lapply(my_packages, require, character.only = TRUE)
+})
+```
+
+
+
+## Directory
+```{r message = F, include = F}
+# data_root_dir = '/path/to/project'
+data_root_dir = '/home/nichrishayes/Cryptomator/NCH_professional_assorted/MADLab/Asthma'
+data_dir_raw = file.path(data_root_dir, 'raw/abcd-data-release-5.1')
+```
+
+
+# Data Loading/Cleaning
+
+## Functions
+
+### File Loading
+```{r message = F, include = F}
+# Raw Data
+abcd_load = function(vars){
+  raw_data = suppressWarnings(lapply(
+  # file.path(data_dir_raw, unique(vars$FileName)), 
+  file.path(data_dir_raw, list.files(pattern = paste(paste(unique(vars$FileName),".csv",sep = ""), collapse = "|"), recursive = TRUE, path = data_dir_raw)), 
+  fread, select = unique(vars$ElementName), sep = ',', fill = TRUE, na.strings=c("", " ", "  ", "NA"), 
+  data.table = FALSE))
+  
+  # Drop first row that contains variable descriptions
+  # raw_data = lapply(raw_data, function(x) x[-c(1),,drop=F])
+}
+```
+
+### Merge
+```{r message = F, include = F}
+# Collapse Raw Data - by unique columns
+abcd_merge = function(data){
+  data = Reduce(function(x, y) merge(x, y, all = T, sort = T), data)
+}
+#by=all_data_common_columns
+#c("baseline_year_1_arm_1", "1_year_follow_up_y_arm_1", "2_year_follow_up_y_arm_1", "3_year_follow_up_y_arm_1")
+```
+
+### BIDS ID
+```{r message = F, include = F}
+abcd_bids = function(data){
+  data = data %>%
+    dplyr::mutate(subID = sub("^","sub-", str_remove(src_subject_id,"_"))) %>%
+    # Create unique numerical ID for each subject
+    group_by(subID) %>%
+    dplyr::mutate(subIDN = cur_group_id()) %>%
+    ungroup()
+}
+```
+
+### Dates and Events
+```{r message = F, include = F}
+abcd_datevents = function(data){
+  data = data %>%
+    # dplyr::mutate_at("interview_date", as.Date, tryFormats = c("%Y-%m-%d", "%m/%d/%Y")) %>% #format = "%m/%d/%Y"
+    dplyr::mutate(eventnameF = factor(eventname,
+                                      c("baseline_year_1_arm_1"
+                                        , "6_month_follow_up_arm_1"
+                                        , "1_year_follow_up_y_arm_1"
+                                        , "18_month_follow_up_arm_1"
+                                        , "2_year_follow_up_y_arm_1"
+                                        , "30_month_follow_up_arm_1"
+                                        , "3_year_follow_up_y_arm_1"
+                                        , "42_month_follow_up_arm_1"
+                                        , "4_year_follow_up_y_arm_1"), 0:8),
+                  sesID = str_c("ses-00", eventnameF))
+}
+```
+
+### Empty and NA
+```{r message = F, include = F}
+abcd_setmissing = function(data, vars, ALL = NULL){
+  if (is.null(ALL)) {
+    data = data %>%
+      dplyr::mutate(across(any_of(vars) & (where(is.numeric) | where(is.integer)) & !where(is.Date), ~na_if(., 999))
+                  , across(any_of(vars) & where(is.character), ~na_if(., "999"))
+                  , across(any_of(vars) & (where(is.numeric) | where(is.integer)) & !where(is.Date), ~na_if(., 777))
+                  , across(any_of(vars) & where(is.character), ~na_if(., "777"))
+                  , across(any_of(vars) & where(is.character), ~na_if(., "")))
+  } 
+  # else {
+  #   data = data %>%
+  #     dplyr::mutate(across(everything() & where(is.character), ~na_if(., "")))
+  # }
+  # Factor/Integer columns to missing (777 = Refuse to answer, 999 = dont know, 77, 99)
+}
+```
+
+
+
+
+
+## Medication
+
+### Load
+```{r message = F, include = F}
+# Variable Data
+medication_vars = read.csv(file.path(data_root_dir, "docs/abcd_var_lists", "main_var_list_medication.csv"), header=T, sep = ',', na.strings=c("","NA")) %>% dplyr::filter(Analysis_Keep == 1)
+medication_data = abcd_load(medication_vars)
+# medication_meta = abcd_meta(medication_vars)
+medication_data = abcd_merge(medication_data)
+medication_data = abcd_bids(medication_data)
+medication_data = abcd_datevents(medication_data)
+meta_var_names = c("subID", "subIDN", "eventnameF", "sesID",
+                   medication_vars$ElementName[which(medication_vars$Analysis_Role %in% c("meta"))])
+medication_var_names1 = colnames(medication_data)[!(colnames(medication_data) %in% meta_var_names)]
+medication_data = medication_data[,c(meta_var_names, medication_var_names1)]
+medication_data = abcd_setmissing(medication_data, medication_var_names1)
+```
+
+
+### Clean
+```{r message = F, include = F}
+# test = lapply(medication_data[,medication_var_names1[which(is.na(str_locate(medication_meta[,medication_var_names1], "medication dosage")[,1]))]], unique)
+
+# Check if any medications are duplicated across the "pls*" columns, set duplicates to NA
+medication_data[,medication_var_names1[startsWith(medication_var_names1, prefix = "pls")]] = 
+  medication_data %>%
+  dplyr::select(any_of(meta_var_names), starts_with("pls")) %>%
+  dplyr::mutate(across(-c(any_of(meta_var_names)), ~gsub("\\.0", "", .))) %>%
+  pivot_longer(
+    cols = starts_with("pls")
+    , names_to = "med_variable"
+    , values_to = "med_value"
+  ) %>% 
+  group_by(subID, sesID) %>%
+  dplyr::mutate(med_value = ifelse(duplicated(med_value), NA, med_value)) %>%
+  ungroup() %>%
+  pivot_wider(names_from = "med_variable", values_from = "med_value") %>%
+  dplyr::select(starts_with("pls"))
+
+# same for other med columns - these have text in them
+medication_data[,medication_var_names1[endsWith(medication_var_names1, suffix = "rxnorm_p")]] = 
+  medication_data %>%
+  dplyr::select(any_of(meta_var_names), ends_with("rxnorm_p")) %>%
+  pivot_longer(
+    cols = ends_with("rxnorm_p")
+    , names_to = "med_variable"
+    , values_to = "med_value"
+  ) %>% 
+  group_by(subID, sesID) %>%
+  dplyr::mutate(med_value = ifelse(duplicated(med_value), NA, med_value)) %>%
+  ungroup() %>%
+  pivot_wider(names_from = "med_variable", values_from = "med_value") %>%
+  dplyr::select(ends_with("rxnorm_p"))
+
+
+## Split and Get a named list/Mapping of Numbers to Names
+medication_data = medication_data %>% 
+  separate_wider_regex(med1_rxnorm_p, patterns = c(med1_rxnorm_p_num = ".*?", " ", med1_rxnorm_p_text = ".*"), cols_remove = T) %>%
+  separate_wider_regex(med2_rxnorm_p, patterns = c(med2_rxnorm_p_num = ".*?", " ", med2_rxnorm_p_text = ".*"), cols_remove = T) %>%
+  separate_wider_regex(med3_rxnorm_p, patterns = c(med3_rxnorm_p_num = ".*?", " ", med3_rxnorm_p_text = ".*"), cols_remove = T)%>%
+  separate_wider_regex(med4_rxnorm_p, patterns = c(med4_rxnorm_p_num = ".*?", " ", med4_rxnorm_p_text = ".*"), cols_remove = T)%>%
+  separate_wider_regex(med5_rxnorm_p, patterns = c(med5_rxnorm_p_num = ".*?", " ", med5_rxnorm_p_text = ".*"), cols_remove = T)%>%
+  separate_wider_regex(med6_rxnorm_p, patterns = c(med6_rxnorm_p_num = ".*?", " ", med6_rxnorm_p_text = ".*"), cols_remove = T)%>%
+  separate_wider_regex(med7_rxnorm_p, patterns = c(med7_rxnorm_p_num = ".*?", " ", med7_rxnorm_p_text = ".*"), cols_remove = T) %>%
+  separate_wider_regex(med8_rxnorm_p, patterns = c(med8_rxnorm_p_num = ".*?", " ", med8_rxnorm_p_text = ".*"), cols_remove = T) %>%
+  dplyr::mutate(across(ends_with("rxnorm_p_num"), ~gsub("\\.0", "", .))) %>%
+  dplyr::mutate(across(ends_with("rxnorm_p_text"), str_to_lower))
+
+
+# Update variables
+medication_var_names1 = colnames(medication_data)[!(colnames(medication_data) %in% c(meta_var_names))]
+
+medication_var_names2 = paste0("medNums_", sprintf("%.3d", c(1:length(medication_var_names1[startsWith(medication_var_names1, prefix = "pls") | endsWith(medication_var_names1, suffix = "_p_num")]))))
+
+## Create new columns for remapping ALL numbers, use to shift values over for certain columns
+medication_data[, medication_var_names2] = 
+  t(apply(medication_data[,medication_var_names1[startsWith(medication_var_names1, prefix = "pls") | endsWith(medication_var_names1, suffix = "_p_num")]], 1, function(x) c(x[!is.na(x)], x[is.na(x)])))
+
+# Check if any medications are duplicated across these new columns, set duplicates to NA
+medication_data[, medication_var_names2] = 
+  medication_data %>%
+  dplyr::select(any_of(c(meta_var_names, medication_var_names2))) %>%
+  pivot_longer(
+    cols = any_of(medication_var_names2)
+    , names_to = "med_variable"
+    , values_to = "med_value"
+  ) %>% 
+  group_by(subID, sesID) %>%
+  dplyr::mutate(med_value = ifelse(duplicated(med_value), NA, med_value)) %>%
+  ungroup() %>%
+  pivot_wider(names_from = "med_variable", values_from = "med_value") %>%
+  dplyr::select(any_of(medication_var_names2))
+
+
+# Drop variables with only NA
+medication_data = medication_data %>% dplyr::select(!starts_with("pls")) %>% dplyr::select(any_of(colnames(medication_data)[lapply(lapply(medication_data, unique), length)!=1]))
+
+# Update variables
+medication_var_names2 = colnames(medication_data)[!(colnames(medication_data) %in% c(meta_var_names))]
+
+
+
+
+##################################################################################################
+
+
+
+
+## Narrow down to unique pairs of number/medication combos - this is the mapping key
+medication_pairs = data.frame()
+for (col in 1:length(medication_var_names2[endsWith(medication_var_names2, suffix = "p_text")])) {
+  medication_pairs = rbind(medication_pairs,
+                           medication_data[,paste0(sprintf("med%d_rxnorm_p_", col), c("num", "text"))] %>% distinct() %>% drop_na() %>% setNames(NULL) %>% as.matrix())
+}
+colnames(medication_pairs) = c("med_nums", "med_names")
+medication_pairs = medication_pairs %>% arrange(med_nums) %>% distinct() %>% dplyr::mutate(med_nums = na_if(med_nums, "")) %>% drop_na() %>% dplyr::mutate(med_names = str_to_lower(med_names))
+
+
+# Groups of interest
+med_adhd = c("guanfacine", "adderall", "methylphenidate", "metadate", "clonidine", "concerta", "vyvanse", "intuniv", "focalin", "dexmethylphenidate", "ritalin", "strattera", "atomoxetine", "aptensio")
+
+# Groups to ignore
+vitamins = c("vitamin", "melatonin", "fish oils", "iron", "magnesium", "calcium", "folic acid")
+overthecounter = c("zyrtec", "claritin", "ibuprofen", "motrin", "tylenol", "benadryl", "advil", "amoxicillin", "allegra", "cetirizine", "dayquil", "loratadine", "nyquil", "acetaminophen", "tums", "mucinex", "naproxen", "aleve")
+
+# Combine
+all_meds_keywords = c(med_adhd, vitamins, overthecounter)
+
+medication_pairs = medication_pairs %>% 
+  dplyr::mutate(adhd_med = str_detect(med_names, paste0(med_adhd, collapse = '|')))
+
+
+##################################################################################################
+
+
+# Determine Which subjects are taking adhd medications
+medication_data = medication_data %>%
+    # Rowwise/per visit medications
+    dplyr::mutate(med_adhd = case_when(if_any(any_of(starts_with("medNums_")), ~ str_detect(., paste0(medication_pairs$med_nums[which(medication_pairs$adhd_med)], collapse = '|'))) ~ T
+          ,!if_any(any_of(starts_with("medNums_")), ~ str_detect(., paste0(medication_pairs$med_nums[which(medication_pairs$adhd_med)], collapse = '|'))) ~ F
+          ,TRUE ~ NA)) %>%
+  dplyr::ungroup()
+```
+
+
+### Plot
+```{r message = F, include = F}
+# Exclude List
+exclude_words = c("mg", "oral", "pill", "Pill", "product", "tablet", "ml", "1", "5", "capsule", "solution", "0", "release", "actuat", "nasal", "extended", "liquid", "topical", "dose", "metered")
+
+
+# From numerical columns back-matched to text
+medication_data_token = medication_data %>%
+  # Text Formatting
+  dplyr::select(starts_with("medNums_")) %>%
+  as.matrix() %>% as.vector() %>% as.data.frame() %>% drop_na() %>%
+  setNames("text") %>% arrange(text) %>%
+  dplyr::mutate(text = medication_pairs$med_names[match(text, medication_pairs$med_nums)]) %>% drop_na() %>%
+  dplyr::filter(!(text %in% exclude_words))
+
+
+medication_data_token %>%
+  count(text, sort = T) %>%
+  top_n(20) %>%
+  ggplot(aes(n, text)) +
+    geom_col() +
+    labs(y = NULL)
+
+
+# Other potentially useful Code
+
+# medication_data_token %>%
+#   count(text, sort = T) %>%
+#   dplyr::rowwise() %>%
+#   dplyr::mutate(keyword = ifelse(any(str_detect(text, all_meds_keywords)), all_meds_keywords[which(str_detect(text, all_meds_keywords))], text)) %>%
+#   group_by(keyword) %>%
+#   dplyr::mutate(n = sum(n)) %>%
+#   ungroup() %>% dplyr::select(-text) %>% arrange(n) %>% distinct() %>%
+#   view()
+
+# # Tokened Version
+# medication_data_token = medication_data %>%
+#   # Text Formatting
+#   dplyr::select(ends_with("_p_text")) %>% #starts_with("medication_")
+#   as.matrix() %>% as.vector() %>% as.data.frame() %>% drop_na() %>%
+#   setNames("text") %>%
+#   dplyr::mutate(line = 1:n()) %>%
+#   as_tibble() %>%
+#   unnest_tokens(word, text) %>%
+#   dplyr::filter(!(word %in% exclude_words))
+
+# medication_data_token %>%
+#   count(text, sort = T) %>%
+#   top_n(20) %>%
+#   with(wordcloud(
+#     text
+#     , n
+#     , max.words = 100,
+#     , col = brewer.pal(6,"Dark2"))
+#   )
+```
+
+
+
+
+#Done
+
