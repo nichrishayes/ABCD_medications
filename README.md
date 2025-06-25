@@ -1,5 +1,5 @@
 # ABCD_medications
-An r-markdown pipeline for processing medication data from the ABCD Study.
+An r-markdown pipeline for processing medication data from the ABCD Study (https://abcdstudy.org/).
 
 ## ABCD Raw Files ##
 This project uses variables from the following ABCD instruments [version 5.1]:
@@ -21,7 +21,7 @@ This project uses variables from the following ABCD instruments [version 5.1]:
 
 - abcd-data-release-5.1/ should contain the raw, unprocessed download of ABCD data
   
-- abcd\_var\_lists/ should contain a .csv data dictionary that will be used to inform the pipeline of which ABCD files and variables to pull information from and merge together.
+- abcd\_var\_lists/ should contain a .csv data dictionary (which can be obtained here: https://data-dict.abcdstudy.org/) that will be used to inform the pipeline of which ABCD files and variables to pull information from and merge together.
 	
 2. The data dictionary file should contain the following columns: 
 ```
@@ -29,7 +29,7 @@ This project uses variables from the following ABCD instruments [version 5.1]:
 ```
 
 - Analysis_Role and Analysis_Keep are prepended to the default columns and manually labelled by the researcher.
-- Analysis_Role should have the value "meta" set for variables with ElementNames ("src_subject_id"	"interview_date"	"eventname") and the corresponding Analysis_Keep column should have the value "1" set for these meta items. These elements are common across different ABCD data files and will be used for merging variables across files. Here's an example meta item row:
+- Analysis_Role should have the value "meta" set for variables with ElementNames ("src_subject_id"	"interview_date"	"eventname") and the corresponding Analysis_Keep column should have the value "1" set for these meta items. These elements are common across different ABCD data files and will be used for merging variables across files. Any variables that should not be included can either be removed from the dictionary file or set to "0" or left as NA in Analysis_Keep. Here's an example meta item row:
 
 ```
 "meta"	"1"	"abcd_y_lt"	"src_subject_id"	"String"	"src_subject_id"	"Subject ID how it's defined in lab/project"	"NA"	"NA"	"acspsw03"	"NA"
